@@ -1,0 +1,60 @@
+include:
+  - ./docker-compose.lmrouter.yaml
+  - ./docker-compose.nginx.yaml
+
+secrets:
+  hf_token:
+    file: ${HF_TOKEN_FILE}
+  vllm_api_key:
+    file: ${VLLM_API_KEY_FILE}
+  nginx_tls_crt:
+    file: ${NGINX_TLS_CERT_FILE}
+  nginx_tls_key:
+    file: ${NGINX_TLS_KEY_FILE}
+
+services:
+  vllm:
+    extends:
+      file: ./docker-compose.vllm-qwen3-vl-235b-a22b-instruct.yaml
+      service: vllm-qwen3-vl-235b-a22b-instruct-nvfp4
+    container_name: vllm-qwen3-vl-235b-a22b-instruct-nvfp4-1
+    gpus:
+      - driver: nvidia
+        device_ids: ["0", "3"]
+        capabilities: [gpu]
+    environment:
+      LMCACHE_INSTANCE_ID: vllm-qwen3-vl-235b-a22b-instruct-nvfp4-1
+    networks:
+      frontend:
+      backend:
+        aliases:
+          - qwen3-vl-235b-a22b-instruct-nvfp4-1.vllm
+
+  vllm2:
+    extends:
+      file: ./docker-compose.vllm-qwen3-vl-235b-a22b-instruct.yaml
+      service: vllm-qwen3-vl-235b-a22b-instruct-nvfp4
+    container_name: vllm-qwen3-vl-235b-a22b-instruct-nvfp4-2
+    gpus:
+      - driver: nvidia
+        device_ids: ["4", "7"]
+        capabilities: [gpu]
+    environment:
+      LMCACHE_INSTANCE_ID: vllm-qwen3-vl-235b-a22b-instruct-nvfp4-2
+    networks:
+      frontend:
+      backend:
+        aliases:
+          - qwen3-vl-235b-a22b-instruct-nvfp4-2.vllm
+
+networks:
+  frontend:
+    name: vllm-frontend
+  backend:
+    name: vllm-backend
+    internal: true
+
+volumes:
+  hf_home:
+    name: ${HF_CACHE_VOLUME_NAME:-vllm-hf-home}
+

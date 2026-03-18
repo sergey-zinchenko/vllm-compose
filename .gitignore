@@ -1,0 +1,19 @@
+# Secrets — never commit
+.secrets/
+*.key
+*.pem
+**/tls.crt
+**/tls.key
+*hf_token*
+*api_key*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.env
+!.env.example

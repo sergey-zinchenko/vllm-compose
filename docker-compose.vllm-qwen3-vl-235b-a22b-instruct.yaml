@@ -1,0 +1,112 @@
+services:
+  vllm-qwen3-vl-235b-a22b-instruct-nvfp4:
+    image: local/vllm-openai-secrets:v0.17.0
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm-openai-secrets
+      args:
+        APP_UID: ${VLLM_UID}
+        APP_GID: ${VLLM_GID}
+    user: "${VLLM_UID}:${VLLM_GID}"
+    restart: on-failure:5
+    stop_grace_period: 2m
+    cpus: "32.0"
+    mem_limit: 256g
+    mem_reservation: 192g
+    pids_limit: 1024
+    shm_size: "16gb"
+    ulimits:
+      core: 0
+      nproc: 2048
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777,exec
+      - /home/vllmuser:size=1g,mode=1700,uid=${VLLM_UID},gid=${VLLM_GID},exec
+    secrets:
+      - hf_token
+      - vllm_api_key
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "1"
+      HF_HOME: /hf_home
+      VLLM_USE_FLASHINFER_MOE_FP16: "1"
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      NCCL_IB_DISABLE: "1"
+      NCCL_P2P_LEVEL: "NVL"
+      LMCACHE_USE_EXPERIMENTAL: "True"
+      VLLM_RPC_TIMEOUT: "1000000"
+      LMCACHE_LOG_LEVEL: INFO
+      LMCACHE_LOCAL_CPU: "True"
+      LMCACHE_MAX_LOCAL_CPU_SIZE: "64"
+      PYTHONHASHSEED: "123"
+      PROMETHEUS_MULTIPROC_DIR: /tmp
+    command:
+      - --model
+      - RedHatAI/Qwen3-VL-235B-A22B-Instruct-NVFP4
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+      - --enable-chunked-prefill
+      - --enable-prefix-caching
+      - --max-model-len
+      - "64000"
+      - --dtype
+      - auto
+      - --tensor-parallel-size
+      - "2"
+      - --swap-space
+      - "32"
+      - --gpu-memory-utilization
+      - "0.95"
+      - --max-num-seqs
+      - "16"
+      - --served-model-name
+      - qwen3-vl-235b-a22b-instruct
+      - --limit-mm-per-prompt.image
+      - "2"
+      - --limit-mm-per-prompt.video
+      - "0"
+      - --attention-backend
+      - FLASHINFER
+      - --reasoning-parser
+      - deepseek_r1
+      - --structured-outputs-config.enable_in_reasoning
+      - "True"
+      - --default-chat-template-kwargs
+      - '{"thinking": true}'
+      - --generation-config
+      - auto
+      - --override-generation-config
+      - '{"max_new_tokens": 8000}'
+      - --kv-cache-dtype
+      - fp8
+      - --max-num-batched-tokens
+      - "16384"
+      - --mm-encoder-tp-mode
+      - data
+    volumes:
+      - hf_home:/hf_home
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import sys,urllib.request; code=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode(); sys.exit(0 if 200 <= code < 400 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_interval: 1m
+      start_period: 3m
+

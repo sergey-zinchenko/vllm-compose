@@ -1,0 +1,28 @@
+# Secrets — NEVER send to build daemon
+.env
+*.txt
+*.key
+*.crt
+*.pem
+.secrets/
+
+# Git
+.git/
+.gitignore
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+README.md
+LICENSE
+docs/
+
+
+# OS junk
+Thumbs.db
+.DS_Store

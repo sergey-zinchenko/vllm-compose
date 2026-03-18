@@ -1,0 +1,73 @@
+services:
+  lmrouter:
+    image: local/lmrouter-secrets:v0.1.10
+    build:
+      context: .
+      dockerfile: Dockerfile.lmrouter-secrets
+      args:
+        APP_UID: ${LMROUTER_UID}
+        APP_GID: ${LMROUTER_GID}
+    container_name: lmrouter
+    restart: on-failure:5
+    stop_grace_period: 30s
+    cpus: "2.0"
+    mem_limit: 2g
+    mem_reservation: 1g
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      nproc: 2048
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /home/vllmuser:size=64m,mode=700,uid=${LMROUTER_UID},gid=${LMROUTER_GID}
+    user: "${LMROUTER_UID}:${LMROUTER_GID}"
+    depends_on:
+      vllm:
+        condition: service_healthy
+      vllm2:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+    secrets:
+      - vllm_api_key
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "1"
+      PYTHONHASHSEED: "123"
+    command:
+      - --port
+      - "8000"
+      - --engine-stats-interval 
+      - "10"
+      - --request-stats-window
+      - "60"
+      - --log-stats
+      - --log-stats-interval
+      - "10"
+      - --log-level
+      - "info"
+      - --dynamic-config-yaml
+      - /etc/lmrouter/router-config.yaml
+    volumes:
+      - ./router-config.yaml:/etc/lmrouter/router-config.yaml:ro
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request; code=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode(); sys.exit(0 if 200 <= code < 400 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_interval: 30s
+      start_period: 1m
+

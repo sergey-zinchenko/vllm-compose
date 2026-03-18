@@ -1,0 +1,55 @@
+services:
+  nginx:
+    image: nginx:1.29
+    container_name: nginx
+    user: "${NGINX_UID}:${NGINX_GID}"
+    restart: on-failure:5
+    stop_grace_period: 30s
+    cpus: "4.0"
+    mem_limit: 512m
+    mem_reservation: 128m
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /etc/nginx/conf.d:size=16m,mode=755,uid=${NGINX_UID},gid=${NGINX_GID}
+    environment:
+      NGINX_HTTP_PORT: "${NGINX_HTTP_PORT:-8080}"
+      NGINX_HTTPS_PORT: "${NGINX_HTTPS_PORT:-8443}"
+      # Substitute only our two port variables; leave all nginx vars ($host etc.) untouched
+      NGINX_ENVSUBST_FILTER: "NGINX_HTTP_PORT|NGINX_HTTPS_PORT"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    depends_on:
+      lmrouter:
+        condition: service_healthy
+    networks:
+      - frontend
+    secrets:
+      - source: nginx_tls_crt
+        target: tls.crt
+      - source: nginx_tls_key
+        target: tls.key
+    volumes:
+      # Global nginx settings (worker_processes, events, http wrapper)
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro,z
+      # Server blocks template — processed by official nginx entrypoint into conf.d/
+      - ./nginx-servers.conf.template:/etc/nginx/templates/servers.conf.template:ro,z
+    ports:
+      - "${NGINX_HTTPS_PORT:-8443}:${NGINX_HTTPS_PORT:-8443}"
+      - "${NGINX_HTTP_PORT:-8080}:${NGINX_HTTP_PORT:-8080}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${NGINX_HTTP_PORT:-8080}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

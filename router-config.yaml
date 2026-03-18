@@ -1,0 +1,9 @@
+service_discovery: static
+routing_logic: kvaware
+session_key: "x-user-id"
+static_models:
+  qwen3-vl-235b-a22b-instruct:
+    static_backends:
+      - http://qwen3-vl-235b-a22b-instruct-nvfp4-1.vllm:8000
+      - http://qwen3-vl-235b-a22b-instruct-nvfp4-2.vllm:8000
+    static_model_type: chat

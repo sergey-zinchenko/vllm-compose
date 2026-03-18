@@ -1,0 +1,143 @@
+# Nginx — SSL termination proxy in front of lmrouter
+# Tuned for: few upstream proxy clients, high request volume,
+#            long-lived keepalive pools, modern CPU, Linux host
+#
+# This file is a template processed by the official nginx Docker image
+# entrypoint (envsubst) at container startup.
+# Only ${NGINX_HTTP_PORT} and ${NGINX_HTTPS_PORT} are substituted;
+# all nginx variables ($host, $remote_addr, etc.) are left untouched
+# thanks to NGINX_ENVSUBST_FILTER.
+
+# ── Request ID — correlate logs across nginx → lmrouter → vllm ─────
+map $http_x_request_id $req_id {
+    default   $http_x_request_id;
+    ""        $request_id;
+}
+
+log_format main '$remote_addr - [$time_local] "$request" $status '
+                'rt=$request_time uct=$upstream_connect_time '
+                'uht=$upstream_header_time urt=$upstream_response_time '
+                'rid=$req_id';
+access_log  /dev/stdout  main;
+
+server_tokens off;   # suppress nginx version in Server header & error pages
+
+sendfile    on;
+tcp_nopush  on;   # batch headers into a single TCP segment
+tcp_nodelay on;   # then flush immediately — works with tcp_nopush after first segment
+
+# ── Downstream (client → nginx) keepalive ────────────────────────────
+keepalive_timeout   300s;
+keepalive_requests  10000;
+
+# ── Request size limit ───────────────────────────────────────────────
+client_max_body_size     30m;   # VLM: base64 images ~4/3 × raw size
+client_body_buffer_size  1m;    # buffer prompt in memory before proxying
+client_body_temp_path    /tmp/client_temp;
+proxy_temp_path          /tmp/proxy_temp;
+fastcgi_temp_path        /tmp/fastcgi_temp;
+scgi_temp_path           /tmp/scgi_temp;
+uwsgi_temp_path          /tmp/uwsgi_temp;
+
+# ── Rate & connection limits ──────────────────────────────────────
+# Zone 1 m ≈ 16 K unique IPs — more than enough for a proxy fleet.
+limit_req_zone   $binary_remote_addr zone=api_rate:1m  rate=30r/s;
+limit_conn_zone  $binary_remote_addr zone=api_conn:1m;
+limit_req_status   429;
+limit_conn_status  429;
+limit_req_log_level  warn;
+limit_conn_log_level warn;
+
+# ── Upstream: lmrouter connection pool ──────────────────────────────
+upstream lmrouter_backend {
+    server            lmrouter:8000;
+    keepalive         32;
+    keepalive_requests 10000;
+    keepalive_timeout  300s;
+}
+
+# ── HTTP — health probe + redirect ──────────────────────────────────
+server {
+    listen       ${NGINX_HTTP_PORT};
+    listen  [::]:${NGINX_HTTP_PORT};
+
+    location /health {
+        access_log  off;
+        return 200  "OK\n";
+        add_header  Content-Type text/plain;
+    }
+
+    location / {
+        return 301 https://$host:${NGINX_HTTPS_PORT}$request_uri;
+    }
+}
+
+# ── HTTPS — SSL termination ─────────────────────────────────────────
+server {
+    listen       ${NGINX_HTTPS_PORT} ssl;
+    listen  [::]:${NGINX_HTTPS_PORT} ssl;
+
+    # HTTP/2 — upstream proxy servers typically support it;
+    # multiplexing reduces per-request overhead significantly.
+    http2  on;
+
+    # Certificates are mounted as Docker secrets.
+    ssl_certificate      /run/secrets/tls.crt;
+    ssl_certificate_key  /run/secrets/tls.key;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    # Mozilla "Intermediate" cipher list — strong and widely compatible
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+
+    # Session cache for few-but-persistent clients
+    ssl_session_cache    shared:SSL:10m;
+    ssl_session_timeout  1d;
+    ssl_session_tickets  off;
+
+    # OCSP stapling — faster TLS handshake, client privacy
+    ssl_stapling         on;
+    ssl_stapling_verify  on;
+    # 127.0.0.11 = Docker embedded DNS (stable since Docker 1.10).
+    resolver 127.0.0.11 valid=60s ipv6=off;
+
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Content-Type-Options  "nosniff" always;
+    add_header X-Frame-Options          "DENY" always;
+    add_header Referrer-Policy          "no-referrer" always;
+    add_header Permissions-Policy        "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy   "default-src 'none'; frame-ancestors 'none'" always;
+
+    # Hide upstream server identity from clients
+    proxy_hide_header X-Powered-By;
+    proxy_hide_header Server;
+
+    location / {
+        # ── Throttle: soften bursts, don't hard-ban ──────────────
+        limit_req   zone=api_rate burst=60 delay=30;
+        limit_conn  api_conn 64;
+
+        proxy_pass         http://lmrouter_backend;
+        proxy_http_version 1.1;
+        # Clear Connection header → enables upstream keepalive
+        proxy_set_header   Connection        "";
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Request-ID      $req_id;
+
+        # Return request ID to client for support correlation
+        add_header X-Request-ID $req_id always;
+
+        # LLM inference and streaming can take several minutes
+        proxy_connect_timeout  10s;
+        proxy_send_timeout     600s;
+        proxy_read_timeout     600s;
+
+        # No buffering — bytes are forwarded immediately.
+        # Essential for SSE / streaming completions from vllm.
+        proxy_buffering  off;
+        proxy_cache      off;
+    }
+}
